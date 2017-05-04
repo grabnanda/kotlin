@@ -87,7 +87,7 @@ public class InlineCodegen extends CallGenerator {
     private final boolean isSameModule;
 
     private final ParametersBuilder invocationParamBuilder = ParametersBuilder.newBuilder();
-    private final Map<Integer, LambdaInfo> expressionMap = new HashMap<>();
+    private final Map<Integer, LambdaInfo> expressionMap = new LinkedHashMap<>();
 
     private final ReifiedTypeInliner reifiedTypeInliner;
 
@@ -412,14 +412,18 @@ public class InlineCodegen extends CallGenerator {
         DefaultSourceMapper defaultSourceMapper = codegen.getParentCodegen().getOrCreateSourceMapper();
         defaultSourceMapper.setCallSiteMarker(new CallSiteMarker(codegen.getLastLineNumber()));
         MethodNode node = nodeAndSmap.getNode();
+        List<DefaultLambda> defaultLambdas = Collections.emptyList();
         if (callDefault) {
-            MethodInlinerUtilKt.expandMaskConditionsAndUpdateVariableNodes(node, maskStartIndex, maskValues, methodHandleInDefaultMethodIndex);
+            defaultLambdas = DefaultMethodUtilKt.expandMaskConditionsAndUpdateVariableNodes(
+                    node, maskStartIndex, maskValues, methodHandleInDefaultMethodIndex,
+                    DefaultMethodUtilKt.extractDefaultLambdaOffsetAndDescriptor(jvmSignature, functionDescriptor)
+            );
         }
         ReifiedTypeParametersUsages reificationResult = reifiedTypeInliner.reifyInstructions(node);
         generateClosuresBodies();
 
         //through generation captured parameters will be added to invocationParamBuilder
-        putClosureParametersOnStack();
+        putClosureParametersOnStack(defaultLambdas);
 
         addInlineMarker(codegen.v, true);
 
@@ -810,11 +814,17 @@ public class InlineCodegen extends CallGenerator {
         return result;
     }
 
-    private void putClosureParametersOnStack() {
+    private void putClosureParametersOnStack(List<DefaultLambda> defaultLambdas) {
         for (LambdaInfo next : expressionMap.values()) {
             //closure parameters for bounded callable references are generated inplace
             if (next.isBoundCallableReference) continue;
             putClosureParametersOnStack(next, null);
+        }
+
+        for (DefaultLambda lambda : defaultLambdas) {
+            LambdaInfo prev = expressionMap.put(lambda.getOffset(), lambda);
+            assert prev == null : "Lambda with offset " + lambda.getOffset() + " already exists: " + prev;
+            //TODO process
         }
     }
 

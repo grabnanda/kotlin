@@ -881,6 +881,12 @@ public class CompileKotlinAgainstInlineKotlinTestGenerated extends AbstractCompi
             doTest(fileName);
         }
 
+        @TestMetadata("defaultInlining.kt")
+        public void testDefaultInlining() throws Exception {
+            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/defaultInlining.kt");
+            doTest(fileName);
+        }
+
         @TestMetadata("defaultMethod.kt")
         public void testDefaultMethod() throws Exception {
             String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/defaultMethod.kt");
