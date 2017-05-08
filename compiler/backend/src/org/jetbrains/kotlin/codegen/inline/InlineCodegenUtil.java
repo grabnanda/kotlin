@@ -22,6 +22,7 @@ import kotlin.text.StringsKt;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.backend.common.output.OutputFile;
+import org.jetbrains.kotlin.builtins.BuiltInsPackageFragment;
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns;
 import org.jetbrains.kotlin.codegen.AsmUtil;
 import org.jetbrains.kotlin.codegen.ExpressionCodegen;
@@ -47,10 +48,12 @@ import org.jetbrains.kotlin.psi.KtFile;
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils;
 import org.jetbrains.kotlin.resolve.jvm.AsmTypes;
 import org.jetbrains.kotlin.resolve.jvm.JvmClassName;
+import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedCallableMemberDescriptor;
 import org.jetbrains.kotlin.types.KotlinType;
 import org.jetbrains.kotlin.util.OperatorNameConventions;
 import org.jetbrains.org.objectweb.asm.*;
 import org.jetbrains.org.objectweb.asm.commons.InstructionAdapter;
+import org.jetbrains.org.objectweb.asm.commons.Method;
 import org.jetbrains.org.objectweb.asm.tree.*;
 import org.jetbrains.org.objectweb.asm.util.Printer;
 import org.jetbrains.org.objectweb.asm.util.Textifier;
@@ -89,7 +92,7 @@ public class InlineCodegenUtil {
     public static final String INLINE_FUN_VAR_SUFFIX = "$iv";
 
     @Nullable
-    public static SMAPAndMethodNode getMethodNode(
+    private static SMAPAndMethodNode getMethodNode(
             byte[] classData,
             String methodName,
             String methodDescriptor,
@@ -164,8 +167,51 @@ public class InlineCodegenUtil {
     }
 
     @Nullable
-    public static VirtualFile findVirtualFile(@NotNull GenerationState state, @NotNull ClassId classId) {
+    private static VirtualFile findVirtualFile(@NotNull GenerationState state, @NotNull ClassId classId) {
         return VirtualFileFinder.SERVICE.getInstance(state.getProject()).findVirtualFileWithHeader(classId);
+    }
+
+    @Nullable
+    public static SMAPAndMethodNode doCreateMethodNodeFromCompiled(
+            @NotNull CallableMemberDescriptor callableDescriptor,
+            @NotNull GenerationState state,
+            @NotNull Method asmMethod
+    ) {
+        if (isBuiltInArrayIntrinsic(callableDescriptor)) {
+            ClassId classId = IntrinsicArrayConstructorsKt.getClassId();
+            byte[] bytes =
+                    InlineCacheKt.getOrPut(state.getInlineCache().getClassBytes(), classId, IntrinsicArrayConstructorsKt::getBytecode);
+            return getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), classId);
+        }
+
+        assert callableDescriptor instanceof DeserializedCallableMemberDescriptor : "Not a deserialized function or proper: " + callableDescriptor;
+
+        KotlinTypeMapper.ContainingClassesInfo containingClasses =
+                state.getTypeMapper().getContainingClassesForDeserializedCallable((DeserializedCallableMemberDescriptor) callableDescriptor);
+
+        ClassId containerId = containingClasses.getImplClassId();
+
+        byte[] bytes = InlineCacheKt.getOrPut(state.getInlineCache().getClassBytes(), containerId, () -> {
+            VirtualFile file = findVirtualFile(state, containerId);
+            if (file == null) {
+                throw new IllegalStateException("Couldn't find declaration file for " + containerId);
+            }
+            try {
+                return file.contentsToByteArray();
+            }
+            catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        return getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), containerId);
+    }
+
+    public static boolean isBuiltInArrayIntrinsic(@NotNull CallableMemberDescriptor callableDescriptor) {
+        if (callableDescriptor instanceof FictitiousArrayConstructor) return true;
+        String name = callableDescriptor.getName().asString();
+        return (name.equals("arrayOf") || name.equals("emptyArray")) &&
+               callableDescriptor.getContainingDeclaration() instanceof BuiltInsPackageFragment;
     }
 
     @Nullable
@@ -444,7 +490,6 @@ public class InlineCodegenUtil {
 
     public static int getConstant(@NotNull AbstractInsnNode ins) {
         int opcode = ins.getOpcode();
-        Integer value;
         if (opcode >= Opcodes.ICONST_0 && opcode <= Opcodes.ICONST_5) {
             return opcode - Opcodes.ICONST_0;
         }

@@ -306,42 +306,6 @@ public class InlineCodegen extends CallGenerator {
         return result;
     }
 
-    @Nullable
-    private static SMAPAndMethodNode doCreateMethodNodeFromCompiled(
-            @NotNull CallableMemberDescriptor callableDescriptor,
-            @NotNull GenerationState state,
-            @NotNull Method asmMethod
-    ) {
-        if (isBuiltInArrayIntrinsic(callableDescriptor)) {
-            ClassId classId = IntrinsicArrayConstructorsKt.getClassId();
-            byte[] bytes =
-                    InlineCacheKt.getOrPut(state.getInlineCache().getClassBytes(), classId, IntrinsicArrayConstructorsKt::getBytecode);
-            return InlineCodegenUtil.getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), classId);
-        }
-
-        assert callableDescriptor instanceof DeserializedCallableMemberDescriptor : "Not a deserialized function or proper: " + callableDescriptor;
-
-        KotlinTypeMapper.ContainingClassesInfo containingClasses =
-                state.getTypeMapper().getContainingClassesForDeserializedCallable((DeserializedCallableMemberDescriptor) callableDescriptor);
-
-        ClassId containerId = containingClasses.getImplClassId();
-
-        byte[] bytes = InlineCacheKt.getOrPut(state.getInlineCache().getClassBytes(), containerId, () -> {
-            VirtualFile file = InlineCodegenUtil.findVirtualFile(state, containerId);
-            if (file == null) {
-                throw new IllegalStateException("Couldn't find declaration file for " + containerId);
-            }
-            try {
-                return file.contentsToByteArray();
-            }
-            catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
-
-        return InlineCodegenUtil.getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), containerId);
-    }
-
     @NotNull
     private static SMAPAndMethodNode doCreateMethodNodeFromSource(
             @NotNull FunctionDescriptor callableDescriptor,
@@ -399,12 +363,6 @@ public class InlineCodegen extends CallGenerator {
         return new SMAPAndMethodNode(node, smap);
     }
 
-    private static boolean isBuiltInArrayIntrinsic(@NotNull CallableMemberDescriptor callableDescriptor) {
-        if (callableDescriptor instanceof FictitiousArrayConstructor) return true;
-        String name = callableDescriptor.getName().asString();
-        return (name.equals("arrayOf") || name.equals("emptyArray")) &&
-               callableDescriptor.getContainingDeclaration() instanceof BuiltInsPackageFragment;
-    }
 
     @NotNull
     private InlineResult inlineCall(@NotNull SMAPAndMethodNode nodeAndSmap, boolean callDefault) {

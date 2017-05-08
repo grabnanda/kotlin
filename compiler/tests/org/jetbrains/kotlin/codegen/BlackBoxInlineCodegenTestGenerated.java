@@ -881,12 +881,6 @@ public class BlackBoxInlineCodegenTestGenerated extends AbstractBlackBoxInlineCo
             doTest(fileName);
         }
 
-        @TestMetadata("defaultInlining.kt")
-        public void testDefaultInlining() throws Exception {
-            String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/defaultInlining.kt");
-            doTest(fileName);
-        }
-
         @TestMetadata("defaultMethod.kt")
         public void testDefaultMethod() throws Exception {
             String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/defaultMethod.kt");
@@ -945,6 +939,27 @@ public class BlackBoxInlineCodegenTestGenerated extends AbstractBlackBoxInlineCo
         public void testSimpleDefaultMethod() throws Exception {
             String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/simpleDefaultMethod.kt");
             doTest(fileName);
+        }
+
+        @TestMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining")
+        @TestDataPath("$PROJECT_ROOT")
+        @RunWith(JUnit3RunnerWithInners.class)
+        public static class LambdaInlining extends AbstractBlackBoxInlineCodegenTest {
+            public void testAllFilesPresentInLambdaInlining() throws Exception {
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
+            }
+
+            @TestMetadata("simpleErased.kt")
+            public void testSimpleErased() throws Exception {
+                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleErased.kt");
+                doTest(fileName);
+            }
+
+            @TestMetadata("simpleNonGeneric.kt")
+            public void testSimpleNonGeneric() throws Exception {
+                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleNonGeneric.kt");
+                doTest(fileName);
+            }
         }
 
         @TestMetadata("compiler/testData/codegen/boxInline/defaultValues/maskElimination")
