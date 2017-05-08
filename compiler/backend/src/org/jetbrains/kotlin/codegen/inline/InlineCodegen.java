@@ -16,24 +16,20 @@
 
 package org.jetbrains.kotlin.codegen.inline;
 
-import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.util.ArrayUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.kotlin.backend.common.CodegenUtil;
-import org.jetbrains.kotlin.builtins.BuiltInsPackageFragment;
 import org.jetbrains.kotlin.codegen.*;
 import org.jetbrains.kotlin.codegen.context.*;
 import org.jetbrains.kotlin.codegen.coroutines.CoroutineCodegenUtilKt;
-import org.jetbrains.kotlin.codegen.intrinsics.IntrinsicArrayConstructorsKt;
 import org.jetbrains.kotlin.codegen.state.GenerationState;
 import org.jetbrains.kotlin.codegen.state.KotlinTypeMapper;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.incremental.KotlinLookupLocation;
 import org.jetbrains.kotlin.load.kotlin.incremental.components.IncrementalCache;
-import org.jetbrains.kotlin.name.ClassId;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.*;
 import org.jetbrains.kotlin.renderer.DescriptorRenderer;
@@ -63,7 +59,6 @@ import org.jetbrains.org.objectweb.asm.tree.InsnList;
 import org.jetbrains.org.objectweb.asm.tree.LabelNode;
 import org.jetbrains.org.objectweb.asm.tree.MethodNode;
 
-import java.io.IOException;
 import java.util.*;
 
 import static org.jetbrains.kotlin.codegen.AsmUtil.getMethodAsmFlags;
@@ -370,18 +365,22 @@ public class InlineCodegen extends CallGenerator {
         DefaultSourceMapper defaultSourceMapper = codegen.getParentCodegen().getOrCreateSourceMapper();
         defaultSourceMapper.setCallSiteMarker(new CallSiteMarker(codegen.getLastLineNumber()));
         MethodNode node = nodeAndSmap.getNode();
-        List<DefaultLambda> defaultLambdas = Collections.emptyList();
+
         if (callDefault) {
-            defaultLambdas = DefaultMethodUtilKt.expandMaskConditionsAndUpdateVariableNodes(
+            List<DefaultLambda> defaultLambdas = DefaultMethodUtilKt.expandMaskConditionsAndUpdateVariableNodes(
                     node, maskStartIndex, maskValues, methodHandleInDefaultMethodIndex,
                     DefaultMethodUtilKt.extractDefaultLambdaOffsetAndDescriptor(jvmSignature, functionDescriptor)
             );
+            for (DefaultLambda lambda : defaultLambdas) {
+                LambdaInfo prev = expressionMap.put(lambda.getOffset(), lambda);
+                assert prev == null : "Lambda with offset " + lambda.getOffset() + " already exists: " + prev;
+            }
         }
         ReifiedTypeParametersUsages reificationResult = reifiedTypeInliner.reifyInstructions(node);
         generateClosuresBodies();
 
         //through generation captured parameters will be added to invocationParamBuilder
-        putClosureParametersOnStack(defaultLambdas);
+        putClosureParametersOnStack();
 
         addInlineMarker(codegen.v, true);
 
@@ -627,7 +626,11 @@ public class InlineCodegen extends CallGenerator {
                 info = invocationParamBuilder.addNextValueParameter(type, false, remappedValue, parameterIndex);
             }
 
-            recordParameterValueInLocalVal(false, isDefaultParameter, info);
+            recordParameterValueInLocalVal(
+                    false,
+                    isDefaultParameter || kind == ValueKind.DEFAULT_LAMBDA_CAPTURED_PARAMETER,
+                    info
+            );
         }
     }
 
@@ -772,17 +775,11 @@ public class InlineCodegen extends CallGenerator {
         return result;
     }
 
-    private void putClosureParametersOnStack(List<DefaultLambda> defaultLambdas) {
+    private void putClosureParametersOnStack() {
         for (LambdaInfo next : expressionMap.values()) {
             //closure parameters for bounded callable references are generated inplace
             if (next.isBoundCallableReference) continue;
             putClosureParametersOnStack(next, null);
-        }
-
-        for (DefaultLambda lambda : defaultLambdas) {
-            LambdaInfo prev = expressionMap.put(lambda.getOffset(), lambda);
-            assert prev == null : "Lambda with offset " + lambda.getOffset() + " already exists: " + prev;
-            //TODO process
         }
     }
 
@@ -791,10 +788,31 @@ public class InlineCodegen extends CallGenerator {
         if (next instanceof ExpressionLambda) {
             codegen.pushClosureOnStack(((ExpressionLambda) next).getClassDescriptor(), true, this, functionReferenceReceiver);
         }
+        else if (next instanceof DefaultLambda) {
+            rememberCapturedForDefaultLambda(next);
+        }
         else {
-            //TODO
+            throw new RuntimeException("Unknown lambda: " + next);
         }
         activeLambda = null;
+    }
+
+    private void rememberCapturedForDefaultLambda(@NotNull LambdaInfo next) {
+        List<CapturedParamDesc> vars = next.getCapturedVars();
+        int paramIndex = 0;
+        for (CapturedParamDesc captured : vars) {
+            putArgumentOrCapturedToLocalVal(
+                    captured.getType(),
+                    //HACK: actually parameter would be placed on stack in default function
+                    // also see ValueKind.DEFAULT_LAMBDA_CAPTURED_PARAMETER check
+                    StackValue.onStack(captured.getType()),
+                    paramIndex,
+                    paramIndex,
+                    ValueKind.DEFAULT_LAMBDA_CAPTURED_PARAMETER
+            );
+
+            paramIndex++;
+        }
     }
 
     @NotNull
