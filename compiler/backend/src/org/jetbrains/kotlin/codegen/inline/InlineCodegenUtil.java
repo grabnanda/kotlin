@@ -92,11 +92,11 @@ public class InlineCodegenUtil {
     public static final String INLINE_FUN_VAR_SUFFIX = "$iv";
 
     @Nullable
-    private static SMAPAndMethodNode getMethodNode(
+    public static SMAPAndMethodNode getMethodNode(
             byte[] classData,
-            String methodName,
-            String methodDescriptor,
-            ClassId classId
+            @NotNull String methodName,
+            @NotNull String methodDescriptor,
+            @NotNull String classInternalName
     ) {
         ClassReader cr = new ClassReader(classData);
         MethodNode[] node = new MethodNode[1];
@@ -141,12 +141,12 @@ public class InlineCodegenUtil {
             return null;
         }
 
-        if (classId.equals(IntrinsicArrayConstructorsKt.getClassId())) {
+        if (IntrinsicArrayConstructorsKt.getClassId().asString().equals(classInternalName)) {
             // Don't load source map for intrinsic array constructors
             debugInfo[0] = null;
         }
 
-        SMAP smap = SMAPParser.parseOrCreateDefault(debugInfo[1], debugInfo[0], classId.asString(), lines[0], lines[1]);
+        SMAP smap = SMAPParser.parseOrCreateDefault(debugInfo[1], debugInfo[0], classInternalName, lines[0], lines[1]);
         return new SMAPAndMethodNode(node[0], smap);
     }
 
@@ -181,7 +181,7 @@ public class InlineCodegenUtil {
             ClassId classId = IntrinsicArrayConstructorsKt.getClassId();
             byte[] bytes =
                     InlineCacheKt.getOrPut(state.getInlineCache().getClassBytes(), classId, IntrinsicArrayConstructorsKt::getBytecode);
-            return getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), classId);
+            return getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), classId.asString());
         }
 
         assert callableDescriptor instanceof DeserializedCallableMemberDescriptor : "Not a deserialized function or proper: " + callableDescriptor;
@@ -204,7 +204,7 @@ public class InlineCodegenUtil {
             }
         });
 
-        return getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), containerId);
+        return getMethodNode(bytes, asmMethod.getName(), asmMethod.getDescriptor(), containerId.asString());
     }
 
     public static boolean isBuiltInArrayIntrinsic(@NotNull CallableMemberDescriptor callableDescriptor) {

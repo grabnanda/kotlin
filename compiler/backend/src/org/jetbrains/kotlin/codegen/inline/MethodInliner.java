@@ -223,7 +223,7 @@ public class MethodInliner {
                     int valueParamShift = Math.max(getNextLocalIndex(), markerShift);//NB: don't inline cause it changes
                     putStackValuesIntoLocals(Arrays.asList(info.getInvokeMethod().getArgumentTypes()), valueParamShift, this, desc);
 
-                    if (invokeCall.lambdaInfo.getInvokeMethodDescriptor().getValueParameters().isEmpty()) {
+                    if (invokeCall.lambdaInfo.getErasedInvokeMethodDescriptor().getValueParameters().isEmpty()) {
                         // There won't be no parameters processing and line call can be left without actual instructions.
                         // Note: if function is called on the line with other instructions like 1 + foo(), 'nop' will still be generated.
                         visitInsn(Opcodes.NOP);
@@ -256,7 +256,7 @@ public class MethodInliner {
                     result.getReifiedTypeParametersUsages().mergeAll(lambdaResult.getReifiedTypeParametersUsages());
 
                     //return value boxing/unboxing
-                    Method bridge = typeMapper.mapAsmMethod(ClosureCodegen.getErasedInvokeFunction(info.getInvokeMethodDescriptor()));
+                    Method bridge = typeMapper.mapAsmMethod(info.getErasedInvokeMethodDescriptor());
                     StackValue.onStack(info.getInvokeMethod().getReturnType()).put(bridge.getReturnType(), this);
                     setLambdaInlining(false);
                     addInlineMarker(this, false);
