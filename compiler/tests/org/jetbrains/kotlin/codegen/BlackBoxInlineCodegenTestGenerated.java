@@ -949,15 +949,33 @@ public class BlackBoxInlineCodegenTestGenerated extends AbstractBlackBoxInlineCo
                 KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.ANY, true);
             }
 
+            @TestMetadata("simple.kt")
+            public void testSimple() throws Exception {
+                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simple.kt");
+                doTest(fileName);
+            }
+
             @TestMetadata("simpleErased.kt")
             public void testSimpleErased() throws Exception {
                 String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleErased.kt");
                 doTest(fileName);
             }
 
-            @TestMetadata("simpleNonGeneric.kt")
-            public void testSimpleNonGeneric() throws Exception {
-                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleNonGeneric.kt");
+            @TestMetadata("simpleErasedStaticInstance.kt")
+            public void testSimpleErasedStaticInstance() throws Exception {
+                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleErasedStaticInstance.kt");
+                doTest(fileName);
+            }
+
+            @TestMetadata("simpleGeneric.kt")
+            public void testSimpleGeneric() throws Exception {
+                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleGeneric.kt");
+                doTest(fileName);
+            }
+
+            @TestMetadata("simpleStaticInstance.kt")
+            public void testSimpleStaticInstance() throws Exception {
+                String fileName = KotlinTestUtils.navigationMetadata("compiler/testData/codegen/boxInline/defaultValues/lambdaInlining/simpleStaticInstance.kt");
                 doTest(fileName);
             }
         }
