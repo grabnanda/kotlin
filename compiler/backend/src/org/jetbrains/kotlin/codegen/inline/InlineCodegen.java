@@ -372,6 +372,7 @@ public class InlineCodegen extends CallGenerator {
                     DefaultMethodUtilKt.extractDefaultLambdaOffsetAndDescriptor(jvmSignature, functionDescriptor)
             );
             for (DefaultLambda lambda : defaultLambdas) {
+                invocationParamBuilder.buildParameters().getParameterByDeclarationSlot(lambda.getOffset()).setLambda(lambda);
                 LambdaInfo prev = expressionMap.put(lambda.getOffset(), lambda);
                 assert prev == null : "Lambda with offset " + lambda.getOffset() + " already exists: " + prev;
             }
@@ -789,7 +790,7 @@ public class InlineCodegen extends CallGenerator {
             codegen.pushClosureOnStack(((ExpressionLambda) next).getClassDescriptor(), true, this, functionReferenceReceiver);
         }
         else if (next instanceof DefaultLambda) {
-            rememberCapturedForDefaultLambda(next);
+            rememberCapturedForDefaultLambda((DefaultLambda) next);
         }
         else {
             throw new RuntimeException("Unknown lambda: " + next);
@@ -797,8 +798,8 @@ public class InlineCodegen extends CallGenerator {
         activeLambda = null;
     }
 
-    private void rememberCapturedForDefaultLambda(@NotNull LambdaInfo next) {
-        List<CapturedParamDesc> vars = next.getCapturedVars();
+    private void rememberCapturedForDefaultLambda(@NotNull DefaultLambda defaultLambda) {
+        List<CapturedParamDesc> vars = defaultLambda.getCapturedVars();
         int paramIndex = 0;
         for (CapturedParamDesc captured : vars) {
             putArgumentOrCapturedToLocalVal(
@@ -812,6 +813,7 @@ public class InlineCodegen extends CallGenerator {
             );
 
             paramIndex++;
+            defaultLambda.getParameterOffsetsInDefault().add(invocationParamBuilder.getNextParameterOffset());
         }
     }
 
