@@ -9,7 +9,7 @@ public class UsingMutableInterfaces {
             cMutableList.getSize();
             cMutableList.size();
             boolean b = cMutableList.remove(elem);
-            E e1 = cMutableList.remove(3);
+            <error>E e1 = cMutableList.remove(3);</error>
             E e2 = cMutableList.removeAt(6);
         }
     }
