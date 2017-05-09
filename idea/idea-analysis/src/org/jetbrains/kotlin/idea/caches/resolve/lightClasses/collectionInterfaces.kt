@@ -21,7 +21,6 @@ import com.intellij.openapi.util.Key
 import com.intellij.psi.*
 import com.intellij.psi.impl.InheritanceImplUtil
 import com.intellij.psi.impl.PsiClassImplUtil
-import com.intellij.psi.impl.PsiSubstitutorImpl
 import com.intellij.psi.impl.PsiSubstitutorImpl.createSubstitutor
 import com.intellij.psi.impl.PsiSuperMethodImplUtil
 import com.intellij.psi.impl.light.*
@@ -30,6 +29,7 @@ import com.intellij.psi.impl.source.PsiExtensibleClass
 import com.intellij.psi.impl.source.PsiImmediateClassType
 import com.intellij.psi.util.MethodSignatureBackedByPsiMethod
 import com.siyeh.ig.psiutils.TypeUtils
+import org.jetbrains.kotlin.asJava.classes.cannotModify
 import org.jetbrains.kotlin.asJava.classes.lazyPub
 import org.jetbrains.kotlin.asJava.elements.KtLightElementBase
 import org.jetbrains.kotlin.builtins.DefaultBuiltIns
@@ -42,8 +42,6 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.platform.JavaToKotlinClassMap
 import org.jetbrains.kotlin.psi.UserDataProperty
-import org.jetbrains.kotlin.resolve.DescriptorUtils
-import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
 
 private val readOnlyQualifiedNamesToJavaClass = JavaToKotlinClassMap.mutabilityMappings.associateBy {
     (_, readOnly, _) ->
@@ -176,7 +174,7 @@ class KtLightMutabilityPlatformWrapper(
     ) = KtLightMethodWrapper(
             this@KtLightMutabilityPlatformWrapper, this,
             shouldBeFinal = makeFinal,
-            _name = name,
+            name = name,
             substituteObjectWith = substituteObjectWith,
             providedSignature = signature
     )
@@ -228,6 +226,8 @@ class KtLightMutabilityPlatformWrapper(
         scope.getContributedFunctions(it, NoLookupLocation.FROM_IDE).isNotEmpty()
         || scope.getContributedVariables(it, NoLookupLocation.FROM_IDE).isNotEmpty()
     }
+
+    override fun getContainingFile() = javaBaseClass.containingFile
 }
 
 private data class MethodSignature(val parameterTypes: List<PsiType>, val returnType: PsiType)
@@ -235,14 +235,14 @@ private data class MethodSignature(val parameterTypes: List<PsiType>, val return
 private class KtLightMethodWrapper(
         private val containingClass: KtAbstractContainerWrapper,
         private val baseMethod: PsiMethod,
-        private val _name: String,
+        private val name: String,
         private val shouldBeFinal: Boolean,
         private val substituteObjectWith: PsiType?,
         private val providedSignature: MethodSignature?
 ) : PsiMethod, KtLightElementBase(containingClass) {
 
     private fun substituteType(psiType: PsiType): PsiType {
-        val substituted = containingClass._substitutor.substitute(psiType)
+        val substituted = containingClass.substitutor.substitute(psiType)
         if (TypeUtils.isJavaLangObject(substituted) && substituteObjectWith != null) {
             return substituteObjectWith
         }
@@ -250,6 +250,8 @@ private class KtLightMethodWrapper(
             return substituted
         }
     }
+
+    override fun getPresentation() = baseMethod.presentation
 
     override val kotlinOrigin get() = null
 
@@ -265,22 +267,25 @@ private class KtLightMethodWrapper(
         return LightParameterListBuilder(manager, KotlinLanguage.INSTANCE).apply {
             baseMethod.parameterList.parameters.forEachIndexed { index, paramFromJava ->
                 val type = providedSignature?.parameterTypes?.get(index) ?: substituteType(paramFromJava.type)
-                addParameter(LightParameter(paramFromJava.name ?: "it", type, this, KotlinLanguage.INSTANCE))
+                addParameter(
+                        LightParameter(paramFromJava.name ?: "it", type,
+                                       this@KtLightMethodWrapper, KotlinLanguage.INSTANCE, paramFromJava.isVarArgs)
+                )
             }
         }
     }
 
-    override fun getName() = _name
+    override fun getName() = name
     override fun getReturnType() = providedSignature?.returnType ?: baseMethod.returnType?.let { substituteType(it) }
 
-    override fun getTypeParameters() = PsiTypeParameter.EMPTY_ARRAY
-    override fun getTypeParameterList() = null
+    override fun getTypeParameters() = baseMethod.typeParameters
+    override fun getTypeParameterList() = baseMethod.typeParameterList
 
     override fun findSuperMethods(checkAccess: Boolean) = PsiSuperMethodImplUtil.findSuperMethods(this, checkAccess)
     override fun findSuperMethods(parentClass: PsiClass) = PsiSuperMethodImplUtil.findSuperMethods(this, parentClass)
     override fun findSuperMethods() = PsiSuperMethodImplUtil.findSuperMethods(this)
     override fun findSuperMethodSignaturesIncludingStatic(checkAccess: Boolean) = PsiSuperMethodImplUtil.findSuperMethodSignaturesIncludingStatic(this, checkAccess)
-    override fun findDeepestSuperMethod() = PsiSuperMethodImplUtil.findDeepestSuperMethod(this)
+    @Suppress("OverridingDeprecatedMember") override fun findDeepestSuperMethod() = PsiSuperMethodImplUtil.findDeepestSuperMethod(this)
     override fun findDeepestSuperMethods() = PsiSuperMethodImplUtil.findDeepestSuperMethods(this)
     override fun getHierarchicalMethodSignature() = PsiSuperMethodImplUtil.getHierarchicalMethodSignature(this)
     override fun getSignature(substitutor: PsiSubstitutor) = MethodSignatureBackedByPsiMethod.create(this, substitutor)
@@ -296,158 +301,108 @@ private class KtLightMethodWrapper(
     override fun getModifierList() = baseMethod.modifierList
     override fun getBody() = null
     override fun isDeprecated() = baseMethod.isDeprecated
-    override fun setName(name: String) = error("Cannot modify")
+    override fun setName(name: String) = cannotModify()
+
+    override fun toString(): String {
+        return "$javaClass:$name${parameterList.parameters.map { it.type }.joinToString(prefix = "(", postfix = ")", separator = ", ")}"
+    }
 }
 
 
 abstract class KtAbstractContainerWrapper(internal val fqName: FqName, private val superInterface: PsiClass)
     : LightElement(superInterface.manager, KotlinLanguage.INSTANCE), PsiExtensibleClass {
 
-    // TODO:
-    val superClassTypeParametersToMyTypeParameters: Map<PsiTypeParameter, PsiTypeParameter> = superInterface.typeParameters.withIndex().associateBy(
+    private val memberCache = ClassInnerStuffCache(this)
+
+    private val superClassTypeParametersToMyTypeParameters: Map<PsiTypeParameter, PsiTypeParameter>
+            = superInterface.typeParameters.withIndex().associateBy(
             keySelector = { (_, supersParameter) -> supersParameter },
             valueTransform = {
                 (index, supersParameter) ->
-                // TODO:
-                LightTypeParameterBuilder("K" + (supersParameter.name ?: ""), this, index)
+                LightTypeParameterBuilder(supersParameter.name ?: "T${index}", this, index)
             }
     )
 
-
-    // TODO: name
-    val _substitutor = createSubstitutor(superClassTypeParametersToMyTypeParameters.mapValues {
+    internal val substitutor = createSubstitutor(superClassTypeParametersToMyTypeParameters.mapValues {
         PsiImmediateClassType(it.value, PsiSubstitutor.EMPTY)
     })
 
     override fun getSupers() = arrayOf(superInterface)
 
-    override fun getOwnInnerClasses() = emptyList<PsiClass>()
-
     override fun getQualifiedName() = fqName.asString()
 
-    override fun getOwnFields() = emptyList<PsiField>()
+    override fun toString() = "$javaClass:$name"
 
-    override fun getAllMethodsAndTheirSubstitutors() =
-            PsiClassImplUtil.getAllWithSubstitutorsByMap<PsiMethod>(this, PsiClassImplUtil.MemberType.METHOD)
+    override fun hasModifierProperty(name: String) = name in setOf(PsiModifier.PUBLIC, PsiModifier.ABSTRACT)
 
-    private val memberCache = ClassInnerStuffCache(this)
+    private val _typeParameterList by lazyPub {
+        LightTypeParameterListBuilder(manager, KotlinLanguage.INSTANCE).apply {
+            superClassTypeParametersToMyTypeParameters.values.forEach { addParameter(it) }
+        }
+    }
+    override fun getTypeParameterList() = _typeParameterList
+
+    private val identifier by lazyPub { LightIdentifier(manager, name) }
+    override fun getNameIdentifier() = identifier
+
+    override fun getName() = fqName.shortName().asString()
 
     private val _implementsList by lazyPub {
         LightReferenceListBuilder(manager, PsiReferenceList.Role.IMPLEMENTS_LIST).apply {
             addReference(superInterface)
         }
     }
-
-    override fun toString() = "$javaClass:$name"
-
-    override fun hasModifierProperty(name: String) = name in setOf(PsiModifier.PUBLIC, PsiModifier.ABSTRACT)
-
-    override fun getInnerClasses() = PsiClass.EMPTY_ARRAY
-
-    override fun findMethodBySignature(patternMethod: PsiMethod, checkBases: Boolean)
-            = PsiClassImplUtil.findMethodBySignature(this, patternMethod, checkBases)
-
-    override fun findInnerClassByName(name: String?, checkBases: Boolean) = null
-
-    override fun getExtendsListTypes() = PsiClassType.EMPTY_ARRAY
-
-    override fun getTypeParameterList(): PsiTypeParameterList? {
-        return LightTypeParameterListBuilder(manager, KotlinLanguage.INSTANCE).apply {
-            superClassTypeParametersToMyTypeParameters.values.forEach { addParameter(it) }
-        } // TODO: lazyPub
-    }
-
-    override fun isAnnotationType() = false
-
-    // TODO_R: lazyPub
-    override fun getNameIdentifier() = LightIdentifier(manager, name)
-
-    override fun getName() = fqName.shortName().asString()
-
-    override fun getFields() = PsiField.EMPTY_ARRAY
-
-    override fun getSuperClass() = null
-
-    override fun findMethodsAndTheirSubstitutorsByName(name: String?, checkBases: Boolean)
-            = PsiClassImplUtil.findMethodsAndTheirSubstitutorsByName(this, name, checkBases)
-
     override fun getImplementsList() = _implementsList
 
-    // TODO: is this correct
-    override fun getSuperTypes(): Array<PsiImmediateClassType> {
-        val javaSupertype = PsiImmediateClassType(superInterface, _substitutor)
-
-        val correspondingBuiltInClass = DefaultBuiltIns.Instance.getBuiltInClassByFqName(fqName)
-        val superWrappers = correspondingBuiltInClass.typeConstructor.supertypes.mapNotNull {
-            platformMutabilityWrapper(DescriptorUtils.getClassDescriptorForType(it).fqNameSafe) {
-                JavaPsiFacade.getInstance(project).findClass(it, superInterface.resolveScope)
-            }?.let {
-                wrapperAncestor ->
-                PsiImmediateClassType(wrapperAncestor, PsiSubstitutorImpl.createSubstitutor(
-                        wrapperAncestor.typeParameters.zip(this.typeParameters.map { it.asType() }).toMap()
-                ))
-            }
-        }
-
-        return (superWrappers + javaSupertype).toTypedArray()
-    }
+    override fun getSuperTypes() = arrayOf(PsiImmediateClassType(superInterface, substitutor))
 
     override fun getMethods() = memberCache.methods
-
-    override fun getRBrace() = null
-
-    override fun getLBrace() = null
-
-    override fun getInitializers() = PsiClassInitializer.EMPTY_ARRAY
-
-    override fun getContainingClass() = null
-
-    override fun isInheritorDeep(baseClass: PsiClass, classToByPass: PsiClass?) = InheritanceImplUtil.isInheritorDeep(this, baseClass, classToByPass)
-
-    override fun isInterface() = true
 
     override fun getTypeParameters() = superClassTypeParametersToMyTypeParameters.values.toTypedArray()
 
     override fun getInterfaces() = arrayOf(superInterface)
 
+    override fun getInitializers() = PsiClassInitializer.EMPTY_ARRAY
+
+    override fun getContainingClass() = null
+
+    override fun getFields() = PsiField.EMPTY_ARRAY
+
+    override fun isInterface() = true
     override fun isInheritor(baseClass: PsiClass, checkDeep: Boolean) = InheritanceImplUtil.isInheritor(this, baseClass, checkDeep)
-
+    override fun getOwnInnerClasses() = emptyList<PsiClass>()
+    override fun getSuperClass() = null
+    override fun findInnerClassByName(name: String?, checkBases: Boolean) = null
+    override fun getExtendsListTypes() = PsiClassType.EMPTY_ARRAY
+    override fun isInheritorDeep(baseClass: PsiClass, classToByPass: PsiClass?) = InheritanceImplUtil.isInheritorDeep(this, baseClass, classToByPass)
+    override fun isAnnotationType() = false
+    override fun findMethodsAndTheirSubstitutorsByName(name: String?, checkBases: Boolean)
+            = PsiClassImplUtil.findMethodsAndTheirSubstitutorsByName(this, name, checkBases)
+    override fun getInnerClasses() = PsiClass.EMPTY_ARRAY
+    override fun findMethodBySignature(patternMethod: PsiMethod, checkBases: Boolean)
+            = PsiClassImplUtil.findMethodBySignature(this, patternMethod, checkBases)
     override fun findFieldByName(name: String?, checkBases: Boolean) = null
-
     override fun getAllFields() = PsiClassImplUtil.getAllFields(this)
-
-    override fun hasTypeParameters() = true
-
     override fun getAllInnerClasses() = PsiClassImplUtil.getAllInnerClasses(this)
-
-    override fun getExtendsList() = null
-
-    override fun getVisibleSignatures() = PsiSuperMethodImplUtil.getVisibleSignatures(this)
-
-    override fun isEnum() = false
-
     override fun findMethodsByName(name: String?, checkBases: Boolean) = memberCache.findMethodsByName(name, checkBases)
-
-    override fun getDocComment() = null
-
     override fun getAllMethods() = PsiClassImplUtil.getAllMethods(this)
-
-    override fun getModifierList() = LightModifierList(manager, KotlinLanguage.INSTANCE) // TODO: lazypub
-
-    override fun getScope(): PsiElement {
-        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
-    }
-
+    override fun getOwnFields() = emptyList<PsiField>()
+    override fun getAllMethodsAndTheirSubstitutors() =
+            PsiClassImplUtil.getAllWithSubstitutorsByMap<PsiMethod>(this, PsiClassImplUtil.MemberType.METHOD)
+    override fun hasTypeParameters() = true
+    override fun getRBrace() = null
+    override fun getLBrace() = null
+    override fun getVisibleSignatures() = PsiSuperMethodImplUtil.getVisibleSignatures(this)
+    override fun getExtendsList() = null
+    override fun getDocComment() = null
+    override fun isEnum() = false
+    private val _modifierList by lazyPub { LightModifierList(manager, KotlinLanguage.INSTANCE) }
+    override fun getModifierList() =  _modifierList
+    override fun getScope() = superInterface.scope
     override fun getImplementsListTypes() = superTypes
-
     override fun getConstructors() = PsiMethod.EMPTY_ARRAY
-
     override fun isDeprecated() = false
-
-    override fun setName(name: String): PsiElement {
-        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
-    }
-
+    override fun setName(name: String) = cannotModify()
     override fun findMethodsBySignature(patternMethod: PsiMethod, checkBases: Boolean)
             = PsiClassImplUtil.findMethodsBySignature(this, patternMethod, checkBases)
 }
