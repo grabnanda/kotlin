@@ -33,12 +33,8 @@ import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCallWithAssert
 import org.jetbrains.kotlin.resolve.jvm.AsmTypes
 import org.jetbrains.kotlin.util.OperatorNameConventions
-import org.jetbrains.org.objectweb.asm.ClassReader
-import org.jetbrains.org.objectweb.asm.ClassVisitor
-import org.jetbrains.org.objectweb.asm.MethodVisitor
 import org.jetbrains.org.objectweb.asm.Type
 import org.jetbrains.org.objectweb.asm.commons.Method
-import org.jetbrains.org.objectweb.asm.tree.AbstractInsnNode
 import org.jetbrains.org.objectweb.asm.tree.FieldInsnNode
 import org.jetbrains.org.objectweb.asm.tree.MethodNode
 
@@ -48,7 +44,7 @@ abstract class LambdaInfo(@JvmField val isCrossInline: Boolean, @JvmField val is
 
     abstract val invokeMethod: Method
 
-    abstract val erasedInvokeMethodDescriptor: FunctionDescriptor
+    abstract val invokeMethodDescriptor: FunctionDescriptor
 
     abstract val capturedVars: List<CapturedParamDesc>
 
@@ -85,14 +81,13 @@ class DefaultLambda(
         override val lambdaClassType: Type,
         val capturedArgs: Array<Type>,
         val parameterDescriptor: ValueParameterDescriptor,
-        val initInstuctions: List<AbstractInsnNode>,
         val offset: Int
 ) : LambdaInfo(parameterDescriptor.isCrossinline, false) {
 
     override lateinit var invokeMethod: Method
         private set
 
-    override val erasedInvokeMethodDescriptor: FunctionDescriptor =
+    override val invokeMethodDescriptor: FunctionDescriptor =
             parameterDescriptor.type.memberScope.getContributedFunctions(OperatorNameConventions.INVOKE, NoLookupLocation.FROM_BACKEND).single()
 
     override lateinit var capturedVars: List<CapturedParamDesc>
@@ -119,38 +114,14 @@ class DefaultLambda(
             capturedParamDesc(fieldNode.name, Type.getType(fieldNode.desc))
         }?.toList() ?: emptyList()
 
-        //TODO more wise invoke extraction
-        val invokes = arrayListOf<String>()
-        val INVOKE_NAME = OperatorNameConventions.INVOKE.asString()
-        classReader.accept(object : ClassVisitor(InlineCodegenUtil.API) {
-            override fun visitMethod(access: Int, name: String, desc: String, signature: String?, exceptions: Array<out String>?): MethodVisitor? {
-                if (INVOKE_NAME == name) {
-                    invokes.add(desc)
-                }
-                return null
-            }
-        }, ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.EXPAND_FRAMES)
-
-        val invokeDesc = when (invokes.size) {
-            0 -> error("Can't find invoke method in $lambdaClassType")
-            1 -> invokes.single()
-            2 -> {
-                val erasedInvoke = codegen.state.typeMapper.mapSignatureSkipGeneric(erasedInvokeMethodDescriptor).asmMethod.descriptor
-                invokes.filter { it != erasedInvoke }.let {
-                    assert(it.size == 1) {
-                        "There are to many invoke methods in class $lambdaClassType, invoke descriptors: " + invokes.joinToString()
-                    }
-                    it.single()
-                }
-            }
-            else -> error("There are to many invoke methods in class $lambdaClassType, invoke descriptors: " + invokes.joinToString())
-        }
-
-        invokeMethod = Method(INVOKE_NAME, invokeDesc)
+        invokeMethod = Method(
+                OperatorNameConventions.INVOKE.asString(),
+                codegen.state.typeMapper.mapSignatureSkipGeneric(invokeMethodDescriptor).asmMethod.descriptor
+        )
         node = InlineCodegenUtil.getMethodNode(
                 classReader.b,
-                INVOKE_NAME,
-                invokeDesc,
+                invokeMethod.name,
+                invokeMethod.descriptor,
                 lambdaClassType.internalName)!!
     }
 
@@ -167,9 +138,7 @@ class ExpressionLambda(
 
     override val invokeMethod: Method
 
-    val invokeMethodDescriptor: FunctionDescriptor
-
-    override val erasedInvokeMethodDescriptor: FunctionDescriptor
+    override val invokeMethodDescriptor: FunctionDescriptor
 
     val classDescriptor: ClassDescriptor
 
@@ -213,7 +182,6 @@ class ExpressionLambda(
 
         labels = InlineCodegen.getDeclarationLabels(expression, invokeMethodDescriptor)
         invokeMethod = typeMapper.mapAsmMethod(invokeMethodDescriptor)
-        erasedInvokeMethodDescriptor = ClosureCodegen.getErasedInvokeFunction(invokeMethodDescriptor)
     }
 
     override val capturedVars: List<CapturedParamDesc> by lazy {

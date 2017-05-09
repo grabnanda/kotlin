@@ -91,6 +91,8 @@ public class InlineCodegenUtil {
     public static final String INLINE_FUN_THIS_0_SUFFIX = "$inline_fun";
     public static final String INLINE_FUN_VAR_SUFFIX = "$iv";
 
+    public static final String DEFAULT_LAMBDA_FAKE_CALL = "$$$DEFAULT_LAMBDA_FAKE_CALL$$$";
+
     @Nullable
     public static SMAPAndMethodNode getMethodNode(
             byte[] classData,

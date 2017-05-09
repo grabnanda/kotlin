@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.codegen.inline
 
+import org.jetbrains.kotlin.codegen.ClosureCodegen
 import org.jetbrains.kotlin.codegen.StackValue
 import org.jetbrains.kotlin.codegen.inline.InlineCodegenUtil.*
 import org.jetbrains.kotlin.codegen.intrinsics.IntrinsicMethods
@@ -188,7 +189,7 @@ class MethodInliner(
                     val valueParamShift = Math.max(nextLocalIndex, markerShift)//NB: don't inline cause it changes
                     putStackValuesIntoLocals(listOf(*info.invokeMethod.argumentTypes), valueParamShift, this, desc)
 
-                    if (invokeCall.lambdaInfo.erasedInvokeMethodDescriptor.valueParameters.isEmpty()) {
+                    if (invokeCall.lambdaInfo.invokeMethodDescriptor.valueParameters.isEmpty()) {
                         // There won't be no parameters processing and line call can be left without actual instructions.
                         // Note: if function is called on the line with other instructions like 1 + foo(), 'nop' will still be generated.
                         visitInsn(Opcodes.NOP)
@@ -220,7 +221,7 @@ class MethodInliner(
                     result.reifiedTypeParametersUsages.mergeAll(lambdaResult.reifiedTypeParametersUsages)
 
                     //return value boxing/unboxing
-                    val bridge = typeMapper.mapAsmMethod(info.erasedInvokeMethodDescriptor)
+                    val bridge = typeMapper.mapAsmMethod(ClosureCodegen.getErasedInvokeFunction(info.invokeMethodDescriptor))
                     StackValue.onStack(info.invokeMethod.returnType).put(bridge.returnType, this)
                     setLambdaInlining(false)
                     addInlineMarker(this, false)

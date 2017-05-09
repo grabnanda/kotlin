@@ -91,13 +91,10 @@ private fun MethodInliner.getLambdaIfExistsAndMarkInstructions(
 }
 
 fun parameterOffsets(valueParameters: List<JvmMethodParameterSignature>): Array<Int> {
-    var offset = 0
+    var nextOffset = 0
     return Array(valueParameters.size) { index ->
-        if (index == 0) {
-            0
-        }
-        else offset.apply {
-            offset += valueParameters[index - 1].asmType.size
+        nextOffset.also {
+            nextOffset += valueParameters[index].asmType.size
         }
     }
 }

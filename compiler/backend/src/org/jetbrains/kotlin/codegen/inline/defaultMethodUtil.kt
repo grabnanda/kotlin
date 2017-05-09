@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.codegen.inline
 
+import org.jetbrains.kotlin.codegen.inline.InlineCodegenUtil.*
 import org.jetbrains.kotlin.codegen.optimization.common.InsnSequence
 import org.jetbrains.kotlin.codegen.optimization.common.asSequence
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
@@ -81,7 +82,7 @@ fun expandMaskConditionsAndUpdateVariableNodes(
             val jumpInstruction = it.next?.next?.next as JumpInsnNode
             Condition(
                     masks[it.`var` - maskStartIndex],
-                    InlineCodegenUtil.getConstant(it.next),
+                    getConstant(it.next),
                     it,
                     jumpInstruction,
                     jumpInstruction.label.previous as VarInsnNode
@@ -97,10 +98,12 @@ fun expandMaskConditionsAndUpdateVariableNodes(
         else null
     }.toList()
 
-    val defaultLambdasInfo = extractDefaultLambdasInfo(conditions, defaultLambdas)
+    val toDelete = arrayListOf<AbstractInsnNode>()
+    val toInsert = arrayListOf<Pair<AbstractInsnNode, AbstractInsnNode>>()
+
+    val defaultLambdasInfo = extractDefaultLambdasInfo(conditions, defaultLambdas, toDelete, toInsert)
 
     val indexToVarNode = node.localVariables?.filter { it.index < maskStartIndex }?.associateBy { it.index } ?: emptyMap()
-    val toDelete = arrayListOf<AbstractInsnNode>()
     conditions.forEach {
         val jumpInstruction = it.jumpInstruction
         InsnSequence(it.maskInstruction, (if (it.expandNotDelete) jumpInstruction.next else jumpInstruction.label)).forEach {
@@ -113,51 +116,74 @@ fun expandMaskConditionsAndUpdateVariableNodes(
         }
     }
 
-    toDelete.forEach {
-        node.instructions.remove(it)
+    toInsert.forEach { (position, newInsn) ->
+        node.instructions.insert(position, newInsn)
     }
+
+    node.remove(toDelete)
 
     return defaultLambdasInfo
 }
 
 
-private fun extractDefaultLambdasInfo(conditions: List<Condition>, defaultLambdas: Map<Int, ValueParameterDescriptor>): List<DefaultLambda> {
+private fun extractDefaultLambdasInfo(
+        conditions: List<Condition>,
+        defaultLambdas: Map<Int, ValueParameterDescriptor>,
+        toDelete: MutableList<AbstractInsnNode>,
+        toInsert: MutableList<Pair<AbstractInsnNode, AbstractInsnNode>>
+): List<DefaultLambda> {
     val defaultLambdaConditions = conditions.filter { it.expandNotDelete && defaultLambdas.contains(it.varIndex) }
-
     return defaultLambdaConditions.map {
         val varAssignmentInstruction = it.varInsNode!!
         var instanceInstuction = varAssignmentInstruction.previous
         if (instanceInstuction is TypeInsnNode && instanceInstuction.opcode == Opcodes.CHECKCAST) {
             instanceInstuction = instanceInstuction.previous
         }
-        when (instanceInstuction) {
+
+        val (owner, argTypes) = when (instanceInstuction) {
             is MethodInsnNode -> {
                 assert(instanceInstuction.name == "<init>") { "Expected constructor call for default lambda, but $instanceInstuction" }
                 val ownerInternalName = instanceInstuction.owner
                 val instanceCreation = InsnSequence(it.jumpInstruction, it.jumpInstruction.label).filter {
                     it.opcode == Opcodes.NEW && (it as TypeInsnNode).desc == ownerInternalName
                 }.single()
+
                 assert(instanceCreation.next?.opcode == Opcodes.DUP) {
-                    "Dup should follow default lambda instanceInstuction creation but ${instanceCreation.next}"
+                    "Dup should follow default lambda instanceInstruction creation but ${instanceCreation.next}"
                 }
 
-                DefaultLambda(
-                        Type.getObjectType(instanceInstuction.owner),
-                        Type.getArgumentTypes(instanceInstuction.desc),
-                        defaultLambdas[it.varIndex]!!,
-                        listOf(instanceCreation, instanceCreation.next) + InsnSequence(instanceInstuction, varAssignmentInstruction).toList(),
-                        it.varIndex
-                )
+                toDelete.apply {
+                    addAll(listOf(instanceCreation, instanceCreation.next))
+                    addAll(InsnSequence(instanceInstuction, varAssignmentInstruction.next).toList())
+                }
+
+                Type.getObjectType(instanceInstuction.owner) to Type.getArgumentTypes(instanceInstuction.desc)
             }
 
-            is FieldInsnNode -> DefaultLambda(
-                    Type.getObjectType(instanceInstuction.owner),
-                    emptyArray<Type>(),
-                    defaultLambdas[it.varIndex]!!,
-                    InsnSequence(instanceInstuction, varAssignmentInstruction).toList(),
-                    it.varIndex
-            )
+            is FieldInsnNode -> {
+                toDelete.apply {
+                    addAll(InsnSequence(instanceInstuction, varAssignmentInstruction.next).toList())
+                }
+
+                Type.getObjectType(instanceInstuction.owner) to emptyArray<Type>()
+            }
             else -> throw RuntimeException("Can't extract default lambda info $it.\n Unknown instruction: $instanceInstuction")
         }
+
+        toInsert.add(varAssignmentInstruction to defaultLambdaFakeCallStub(argTypes, it.varIndex))
+
+        DefaultLambda(owner, argTypes, defaultLambdas[it.varIndex]!!, it.varIndex)
     }
+}
+
+//marker that removes captured parameters from stack
+//at inlining it would be substituted with parameters store
+private fun defaultLambdaFakeCallStub(args: Array<Type>, lambdaOffset: Int): MethodInsnNode {
+    return MethodInsnNode(
+            Opcodes.INVOKESTATIC,
+            DEFAULT_LAMBDA_FAKE_CALL,
+            DEFAULT_LAMBDA_FAKE_CALL + lambdaOffset,
+            Type.getMethodDescriptor(Type.VOID_TYPE, *args),
+            false
+    )
 }
